@@ -32,11 +32,11 @@ config.update({props.num_streams: "8"})             # number of simultaneous inf
 
 config = Core i7-10700K, Mem 64GB, Win11, OpenVINO 2025.0
 
-### Synchronous API (device=CPU) - 60fps
-CPU utilization is 17%
+### Synchronous API (device=CPU) - 212fps
+CPU utilization is 45%
 ![Synchronous](./resources/sync.jpg)
 
-### Acynshronous API (device=CPU) - 1,024fps (x17 to sync)
+### Acynshronous API (device=CPU) - 1,024fps (x4.8 to sync)
 CPU utilization is 100%.
 ![Asynchronous](./resources/async.jpg)
 
