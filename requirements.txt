@@ -1,0 +1,3 @@
+openvino
+opencv-python
+numpy
