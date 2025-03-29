@@ -37,7 +37,7 @@ class DemoOpenVINO():
         self.input_source = 'head-pose-face-detection-female-and-male.mp4'
 
 
-    def load_and_init_model(self, model_file_name):
+    def load_and_init_model(self, model_file_name:str, target_device:str='CPU'):
         self.ov_model = ov.Core().read_model(model_file_name)
 
         # obtain model input information
@@ -53,10 +53,11 @@ class DemoOpenVINO():
         config={'CACHE_DIR':'./cache'}
         config.update({hints.performance_mode: hints.PerformanceMode.THROUGHPUT})
         config.update({hints.num_requests:"32"})            # number of request queue
-        config.update({props.inference_num_threads: "16"})  # number of thread used by OpenVINO runtime
+        if target_device in ['CPU']:
+            config.update({props.inference_num_threads: "16"})  # number of thread used by OpenVINO runtime
         config.update({props.num_streams: "8"})             # number of simultaneous inference request execution
 
-        self.model = ov.compile_model(self.ov_model, device_name='CPU', config=config)
+        self.model = ov.compile_model(self.ov_model, device_name=target_device, config=config)
 
         # Create async queue for easy handling
         self.async_infer_queue = ov.AsyncInferQueue(model=self.model, jobs=0) # jobs=0 means, automatic
@@ -190,7 +191,7 @@ class DemoOpenVINO():
         self.th_postprocess = None
         self.th_input = None
     
-        self.load_and_init_model('face-detection-0200.xml')
+        self.load_and_init_model('face-detection-0200.xml', 'GPU.0') # 'CPU', 'GPU', 'GPU.0', 'GPU.1', 'NPU', ...
 
         self.th_render       = threading.Thread(target=self.thread_render_result)
         self.th_postprocess  = threading.Thread(target=self.thread_postprocess)

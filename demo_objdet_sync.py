@@ -24,6 +24,7 @@ class DemoOpenVINO():
         self.abort_flag = False
         self.ready = False
         self.fps = 0
+        self.time_last_update = time.perf_counter()
 
         self.input_source = 0
         self.input_source = './classroom.mp4'
@@ -34,14 +35,13 @@ class DemoOpenVINO():
             self.input_stream.set(cv2.CAP_PROP_FRAME_WIDTH, 480)
             self.input_stream.set(cv2.CAP_PROP_FPS, 30)
             self.ready = True
-            self.time_last_update = time.perf_counter()
         else:
             logger.error('Failed to open input stream. Abort')
             self.abort_flag = True
             return
 
 
-    def load_and_init_model(self, model_file_name):
+    def load_and_init_model(self, model_file_name:str, target_device:str='CPU'):
         self.ov_model = ov.Core().read_model(model_file_name)
 
         # obtain model input information
@@ -55,7 +55,7 @@ class DemoOpenVINO():
 
         # OpenVINO performance optimize parameters and hints
         config={'CACHE_DIR':'./cache'}
-        self.model = ov.compile_model(self.ov_model, device_name='CPU', config=config)
+        self.model = ov.compile_model(self.ov_model, device_name=target_device, config=config)
 
     def open_input_stream(self):
         self.input_stream = cv2.VideoCapture(self.input_source)
@@ -105,10 +105,12 @@ class DemoOpenVINO():
         cv2.putText(img, disp_str, (0, h + baseline), font, scale, (0,0,0), thickness)
         cv2.putText(img, disp_str, (0, h + baseline), font, scale, (0,255,0), thickness-2)
 
-        cv2.imshow('image', img)
-        key = cv2.waitKey(1)
-        if key in (27, ord('q'), ord('Q'), ord(' ')):   # 27 is ESC key
-            self.abort_flag = True
+        if time.perf_counter() - self.time_last_update > 1/30:   # update display every 1/30 sec only
+            cv2.imshow('image', img)
+            key = cv2.waitKey(1)
+            self.time_last_update = time.perf_counter()
+            if key in (27, ord('q'), ord('Q'), ord(' ')):   # 27 is ESC key
+                self.abort_flag = True
 
         return img
 
@@ -124,7 +126,7 @@ class DemoOpenVINO():
 
 
     def run(self):
-        self.load_and_init_model('face-detection-0200.xml')
+        self.load_and_init_model('face-detection-0200.xml', 'CPU') # 'CPU', 'GPU', 'GPU.0', 'GPU.1', 'NPU', ...
 
         num_loop = 10
         while self.abort_flag == False:
