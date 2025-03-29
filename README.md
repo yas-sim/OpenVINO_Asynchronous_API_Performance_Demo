@@ -33,7 +33,9 @@ config.update({props.num_streams: "8"})             # number of simultaneous inf
 config = Core i7-10700K, Mem 64GB, Win11, OpenVINO 2025.0
 
 ### Synchronous API (device=CPU) - 212fps
-CPU utilization is 45%
+CPU utilization is 45%  
+**Note:** The initial version had 60fps performance. The fps performance improved after I changed the program to update the screen every 1/30sec only (reducing the screen update burden).
+
 ![Synchronous](./resources/sync.jpg)
 
 ### Acynshronous API (device=CPU) - 1,024fps (x4.8 to sync)
