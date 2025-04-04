@@ -37,7 +37,7 @@ class DemoOpenVINO():
         self.input_source = 'head-pose-face-detection-female-and-male.mp4'
 
 
-    def load_and_init_model(self, model_file_name:str, target_device:str='CPU'):
+    def load_model(self, model_file_name:str, target_device:str='CPU'):
         self.ov_model = ov.Core().read_model(model_file_name)
 
         # obtain model input information
@@ -66,7 +66,7 @@ class DemoOpenVINO():
 
     def thread_render_result(self):
         img_h, img_w = self.image.shape[:2]
-        while self.abort_flag == False:
+        while True:
             if self.image is None:
                 continue
             if self.queue_renderd_result.empty():
@@ -119,9 +119,8 @@ class DemoOpenVINO():
             self.ready = True
         else:
             logger.error('Failed to open input stream. Abort')
-            self.abort_flag = True
             return
-        while self.abort_flag == False:
+        while True:
             img = self.get_input_frame()
             self.image_lock.acquire()
             self.image = img
@@ -139,7 +138,7 @@ class DemoOpenVINO():
 
 
     def thread_postprocess(self):
-        while self.abort_flag == False:
+        while True:
             while self.queue_inference_result.empty():
                 time.sleep((1/30)/2)                # No inference result. Sleep for a short time
             infer_result, img = self.queue_inference_result.get()
@@ -191,11 +190,11 @@ class DemoOpenVINO():
         self.th_postprocess = None
         self.th_input = None
     
-        self.load_and_init_model('face-detection-0200.xml', 'GPU.0') # 'CPU', 'GPU', 'GPU.0', 'GPU.1', 'NPU', ...
+        self.load_model('face-detection-0200.xml', 'GPU.0') # 'CPU', 'GPU', 'GPU.0', 'GPU.1', 'NPU', ...
 
-        self.th_render       = threading.Thread(target=self.thread_render_result)
-        self.th_postprocess  = threading.Thread(target=self.thread_postprocess)
-        self.th_input        = threading.Thread(target=self.thread_capture_image)
+        self.th_render       = threading.Thread(target=self.thread_render_result, daemon=True)
+        self.th_postprocess  = threading.Thread(target=self.thread_postprocess, daemon=True)
+        self.th_input        = threading.Thread(target=self.thread_capture_image, daemon=True)
 
         self.th_render.start()
         self.th_postprocess.start()
@@ -212,21 +211,7 @@ class DemoOpenVINO():
 
 
     def __del__(self):
-        self.abort_flag = True
         cv2.destroyAllWindows()
-        if self.th_input is not None:
-            self.th_input.join()
-            self.th_input = None
-        if self.th_render is not None:
-            self.th_render.join()
-            self.th_render = None
-        if self.th_postprocess is not None:
-            self.th_postprocess.join()
-            self.th_postprocess = None
-        if self.input_stream is not None:
-            self.input_stream.release()
-            self.input_stream = None
-
 
 if __name__ == '__main__':
     demo = DemoOpenVINO()
