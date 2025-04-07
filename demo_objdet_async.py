@@ -23,7 +23,7 @@ import openvino.properties.hint as hints
 class DemoOpenVINO():
     def __init__(self):
         self.image = np.zeros((480,640,3), dtype=np.uint8)  # Input image for inference
-        self.image_lock = threading.Lock()                  # Lock object to update the input image data
+        self.queue_image = queue.Queue()
         self.queue_renderd_result = queue.Queue()
         self.queue_inference_result = queue.Queue()
         self.input_stream = None
@@ -33,7 +33,7 @@ class DemoOpenVINO():
         self.time_last_render_result_update = time.perf_counter()
         self.fps = 0
         self.input_source = 0
-        self.input_source = 'classroom.mp4'
+        #self.input_source = 'classroom.mp4'
         self.input_source = 'head-pose-face-detection-female-and-male.mp4'
 
 
@@ -52,7 +52,7 @@ class DemoOpenVINO():
         # OpenVINO performance optimize parameters and hints
         config={'CACHE_DIR':'./cache'}
         config.update({hints.performance_mode: hints.PerformanceMode.THROUGHPUT})
-        config.update({hints.num_requests:"32"})            # number of request queue
+        config.update({hints.num_requests:"16"})            # number of request queue
         if target_device in ['CPU']:
             config.update({props.inference_num_threads: "16"})  # number of thread used by OpenVINO runtime
         config.update({props.num_streams: "8"})             # number of simultaneous inference request execution
@@ -67,13 +67,7 @@ class DemoOpenVINO():
     def thread_render_result(self):
         img_h, img_w = self.image.shape[:2]
         while True:
-            if self.image is None:
-                continue
-            if self.queue_renderd_result.empty():
-                time.sleep(0.01)                    # neglegible (short) wait
-                continue
-            result = self.queue_renderd_result.get()
-            img = result[0]
+            inf_id, img = self.queue_renderd_result.get()
 
             disp_str = f'{self.fps:7.2f} FPS'
             font = cv2.FONT_HERSHEY_PLAIN
@@ -84,34 +78,15 @@ class DemoOpenVINO():
             cv2.putText(img, disp_str, (0, h + baseline), font, scale, (0,255,0), thickness-2)
 
             cv2.imshow('image', img)
-            key = cv2.waitKey(25)       # a little shorter than 1/30 sec
+            key = cv2.waitKey(1)       # a little shorter than 1/30 sec
             if key in (27, ord('q'), ord('Q'), ord(' ')):   # 27 is ESC key
                 self.abort_flag = True
 
 
-    def open_input_stream(self):
-        self.input_stream = cv2.VideoCapture(self.input_source)
-    
-    def get_input_frame(self):
-        if self.input_stream == None:
-            self.open_input_stream()
-        sts, img = self.input_stream.read()
-        # reopen the input stream (for movie inputs)
-        if sts == False:
-            self.input_stream.release()
-            self.open_input_stream()
-            sts, img = self.input_stream.read()
-            if sts == False:
-                logger.error('Failed to reopen input stream')
-                self.abort_flag = True
-                img = np.zeros((640,480,3), dtype=np.uint8)     # dummy
-        img = cv2.resize(img, (640, 480))
-        return img
-
     # thread to capture the input image for inference
     def thread_capture_image(self):
         # Open input media stream
-        self.open_input_stream()
+        self.input_stream = cv2.VideoCapture(self.input_source)
         if self.input_stream is not None:
             self.input_stream.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             self.input_stream.set(cv2.CAP_PROP_FRAME_WIDTH, 480)
@@ -121,11 +96,15 @@ class DemoOpenVINO():
             logger.error('Failed to open input stream. Abort')
             return
         while True:
-            img = self.get_input_frame()
-            self.image_lock.acquire()
-            self.image = img
-            self.image_lock.release()
-            time.sleep(1/30)
+            sts, img = self.input_stream.read()
+            if sts == False or img is None:
+                self.input_stream.release()
+                self.input_stream = cv2.VideoCapture(self.input_source)
+                continue
+            if self.queue_image.qsize() > 10:       # avoid excessive queueing
+                time.sleep(1e-3)
+            self.queue_image.put(img)
+            time.sleep(1e-3)
 
 
     # input image preprocess
@@ -139,10 +118,8 @@ class DemoOpenVINO():
 
     def thread_postprocess(self):
         while True:
-            while self.queue_inference_result.empty():
-                time.sleep((1/30)/2)                # No inference result. Sleep for a short time
-            infer_result, img = self.queue_inference_result.get()
-            result_image = img.copy()
+            inf_id, infer_result, img = self.queue_inference_result.get()
+            result_image = img
             img_h, img_w = img.shape[:2]
             faces = infer_result[0, 0]              # (1, 1, 200, 7) -> (200, 7)
             for face in faces:
@@ -157,58 +134,51 @@ class DemoOpenVINO():
                 # send the rendered result every 1/30 sec only
                 if time.perf_counter() - self.time_last_render_result_update > 1/30:  # check if 1/30 sec elapsed
                     self.time_last_render_result_update = time.perf_counter()
-                    self.queue_renderd_result.put((result_image,))
+                    self.queue_renderd_result.put((inf_id, result_image))
 
 
     # callback function to receive the asynchronous inference result
     def callback(self, request, userdata):      # userdata == input image for inferencing
+        inf_id, img = userdata
         res = list(request.results.values())[0]
-        if time.perf_counter() - self.time_last_callback < 1/30:        # submit the result to the rendering thread every 1/30 sec only
-            return
         self.time_last_callback = time.perf_counter()
-        self.queue_inference_result.put((res, userdata))
+        self.queue_inference_result.put((inf_id, res, img))
 
 
-    def infer(self):
-        # get an image captured by the image capture thread (therefore, synchronization is required)
-        self.image_lock.acquire()
-        img = self.image.copy()
-        self.image_lock.release()
-
-        tensor = self.preprocess(img)
-
-        # run asynchronous inference
-        # AsyncInferQueue object checks the availability of request queue.
-        # No need to check it by the user code.
-        # (But it is possible to check the request queue availability by .is_ready() member func)
-        self.async_infer_queue.start_async(inputs=tensor, userdata=img)
-
-
-
-    def run(self):
-        self.th_render = None
-        self.th_postprocess = None
-        self.th_input = None
-    
-        self.load_model('face-detection-0200.xml', 'GPU.0') # 'CPU', 'GPU', 'GPU.0', 'GPU.1', 'NPU', ...
-
-        self.th_render       = threading.Thread(target=self.thread_render_result, daemon=True)
-        self.th_postprocess  = threading.Thread(target=self.thread_postprocess, daemon=True)
-        self.th_input        = threading.Thread(target=self.thread_capture_image, daemon=True)
-
-        self.th_render.start()
-        self.th_postprocess.start()
-        self.th_input.start()
-
+    def thread_infer(self):
         # run inference and measure performance
         num_loop = 10
+        tensor = None
+        image = None
+        inf_id = 0
         while self.abort_flag == False:
             stime = time.perf_counter()
             for _ in range(num_loop):
-                self.infer()
+                if self.queue_image.qsize() > 0:
+                    image = self.queue_image.get()
+                    tensor = self.preprocess(image)
+                if tensor is None:
+                    continue
+                self.async_infer_queue.start_async(inputs=tensor, userdata=(inf_id, image))
+                inf_id += 1
             etime = time.perf_counter()
             self.fps = 1/((etime-stime)/num_loop)
 
+    def run(self):
+        self.load_model('face-detection-0200.xml', 'CPU') # 'CPU', 'GPU', 'GPU.0', 'GPU.1', 'NPU', ...
+
+        self.th_input        = threading.Thread(target=self.thread_capture_image, daemon=True)
+        self.th_infer        = threading.Thread(target=self.thread_infer, daemon=True)
+        self.th_postprocess  = threading.Thread(target=self.thread_postprocess, daemon=True)
+        self.th_render       = threading.Thread(target=self.thread_render_result, daemon=True)
+
+        self.th_input.start()
+        self.th_infer.start()
+        self.th_postprocess.start()
+        self.th_render.start()
+
+        while self.abort_flag == False:
+            time.sleep(10e-3)
 
     def __del__(self):
         cv2.destroyAllWindows()
